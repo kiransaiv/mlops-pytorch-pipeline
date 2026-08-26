@@ -31,3 +31,10 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Assignment source material - not part of the deliverable repo
+assignment.pdf
+
+# Local-only config overrides (not committed)
+*.local.yaml
+test_image.png
