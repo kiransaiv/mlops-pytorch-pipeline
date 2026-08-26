@@ -176,3 +176,9 @@ curl.exe -X POST http://localhost:8080/predict -F "image=@test_image.png"
 ## CI
 
 `.github/workflows/ci.yml` runs on every push/PR to `main` and `develop`: installs dependencies and runs the `pytest` suite in `tests/`.
+
+## AI Assistance
+
+Portions of the code in this repository were written with the help of an LLM. Every AI-suggested change was reviewed, tested against the actual command output described in this README (local runs, Docker builds, and the live Kubernetes cluster), and is understood well enough.
+
+
