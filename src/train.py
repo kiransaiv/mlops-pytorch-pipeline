@@ -1,1 +1,154 @@
-# Training loop, reads configs/training_config.yaml - implemented in Part B
+"""Training loop for the CIFAR-10 classifier.
+
+Reads hyperparameters from a YAML config (see resolve_config_path() for the
+resolution order), logs structured JSON lines per epoch, checkpoints the
+best model by validation loss, and supports early stopping.
+"""
+
+import json
+import os
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+import yaml
+
+from dataset import get_dataloaders
+from model import get_model
+
+
+def load_config(config_path: str) -> dict:
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
+def resolve_config_path() -> Path:
+    """Config resolution order:
+    1. TRAINING_CONFIG_PATH env var (explicit override)
+    2. /app/configs/training_config.yaml (Kubernetes ConfigMap mount / Docker volume)
+    3. configs/training_config.yaml (repo default, baked into the image)
+    """
+    env_override = os.environ.get("TRAINING_CONFIG_PATH")
+    if env_override:
+        return Path(env_override)
+    mounted = Path("/app/configs/training_config.yaml")
+    if mounted.exists():
+        return mounted
+    return Path("configs/training_config.yaml")
+
+
+def _smoke_test_limit():
+    """Optional cap on batches/epoch for fast local sanity checks. Unset in
+    Docker/Kubernetes, so it never affects real training runs."""
+    value = os.environ.get("SMOKE_TEST_MAX_BATCHES")
+    return int(value) if value else None
+
+
+def train_one_epoch(model, loader, optimizer, criterion, device, max_batches=None):
+    model.train()
+    total_loss = 0.0
+    correct = 0
+    total = 0
+    for batch_idx, (inputs, targets) in enumerate(loader):
+        if max_batches is not None and batch_idx >= max_batches:
+            break
+        inputs, targets = inputs.to(device), targets.to(device)
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item() * inputs.size(0)
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
+    return total_loss / total, correct / total
+
+
+@torch.no_grad()
+def evaluate(model, loader, criterion, device, max_batches=None):
+    model.eval()
+    total_loss = 0.0
+    correct = 0
+    total = 0
+    for batch_idx, (inputs, targets) in enumerate(loader):
+        if max_batches is not None and batch_idx >= max_batches:
+            break
+        inputs, targets = inputs.to(device), targets.to(device)
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+
+        total_loss += loss.item() * inputs.size(0)
+        _, predicted = outputs.max(1)
+        total += targets.size(0)
+        correct += predicted.eq(targets).sum().item()
+    return total_loss / total, correct / total
+
+
+def main():
+    config = load_config(str(resolve_config_path()))
+    max_batches = _smoke_test_limit()
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(json.dumps({"event": "device_selected", "device": str(device)}), flush=True)
+
+    model = get_model(
+        architecture=config["model"]["architecture"],
+        num_classes=config["model"]["num_classes"],
+    ).to(device)
+
+    train_loader, val_loader = get_dataloaders(
+        data_dir=config["data"]["data_dir"],
+        batch_size=config["training"]["batch_size"],
+    )
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["training"]["learning_rate"])
+    criterion = nn.CrossEntropyLoss()
+
+    best_val_loss = float("inf")
+    patience_counter = 0
+    patience = config["training"]["early_stopping_patience"]
+
+    checkpoint_dir = Path(config["output"]["checkpoint_dir"])
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    for epoch in range(config["training"]["epochs"]):
+        train_loss, train_acc = train_one_epoch(
+            model, train_loader, optimizer, criterion, device, max_batches
+        )
+        val_loss, val_acc = evaluate(model, val_loader, criterion, device, max_batches)
+
+        print(json.dumps({
+            "epoch": epoch + 1,
+            "train_loss": round(train_loss, 4),
+            "train_accuracy": round(train_acc, 4),
+            "val_loss": round(val_loss, 4),
+            "val_accuracy": round(val_acc, 4),
+        }), flush=True)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            save_path = checkpoint_dir / config["output"]["model_name"]
+            torch.save({
+                "epoch": epoch + 1,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "val_loss": val_loss,
+                "val_accuracy": val_acc,
+                "architecture": config["model"]["architecture"],
+                "num_classes": config["model"]["num_classes"],
+            }, save_path)
+            print(json.dumps({"event": "checkpoint_saved", "path": str(save_path)}), flush=True)
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(json.dumps({"event": "early_stopping", "epoch": epoch + 1}), flush=True)
+                break
+
+    print(json.dumps({"event": "training_complete", "best_val_loss": round(best_val_loss, 4)}), flush=True)
+
+
+if __name__ == "__main__":
+    main()
