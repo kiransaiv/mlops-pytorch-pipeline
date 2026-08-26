@@ -49,6 +49,13 @@ spec:
           # runtime (no registry push for this assignment) - IfNotPresent
           # stops Kubernetes from trying to pull it from Docker Hub.
           imagePullPolicy: IfNotPresent
+          env:
+            # Caps batches/epoch for the required Part F verification run,
+            # so a full CPU-only ResNet-18 training run doesn't take hours.
+            # Remove this env var (or raise the value) for a real, full-scale
+            # training run - it changes nothing else about the pipeline.
+            - name: SMOKE_TEST_MAX_BATCHES
+              value: "5"
           volumeMounts:
             - name: config-volume
               mountPath: /app/configs
