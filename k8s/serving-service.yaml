@@ -1,1 +1,12 @@
-# Serving Service manifest - implemented in Part E
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-serving
+  namespace: ml-training
+spec:
+  type: ClusterIP
+  selector:
+    app: model-serving
+  ports:
+    - port: 80
+      targetPort: 8080
