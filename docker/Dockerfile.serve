@@ -1,1 +1,39 @@
-# Serving image (non-root, HEALTHCHECK) - implemented in Part C
+# syntax=docker/dockerfile:1
+
+# ---- Stage 1: builder - install ONLY inference dependencies into a venv ----
+FROM python:3.11-slim AS builder
+WORKDIR /app
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements/serve.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r serve.txt
+
+# ---- Stage 2: serving runtime ----
+FROM python:3.11-slim AS serving
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    CHECKPOINT_PATH=/app/checkpoints/classifier_v1.pt
+
+COPY src/ ./src/
+
+# Non-root user: create it, own the app dir (including the checkpoint mount
+# point), then drop root privileges for the rest of the image.
+RUN useradd --create-home --uid 1000 appuser \
+    && mkdir -p /app/checkpoints \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8080
+
+# No curl in the slim image on purpose (keeps it lean) - use Python's stdlib
+# to hit our own /health endpoint instead.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health').read()" || exit 1
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--chdir", "src", "serve:app"]

@@ -1,1 +1,28 @@
-# Multi-stage training image - implemented in Part C
+# syntax=docker/dockerfile:1
+
+# ---- Stage 1: builder - install dependencies into an isolated venv ----
+FROM python:3.11-slim AS builder
+WORKDIR /app
+
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements/train.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r train.txt
+
+# ---- Stage 2: training runtime - copy only the venv + app code ----
+FROM python:3.11-slim AS training
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+COPY src/ ./src/
+COPY configs/ ./configs/
+
+# Populated at runtime via -v mounts (Docker) or a PVC (Kubernetes)
+RUN mkdir -p /app/data /app/checkpoints
+
+ENTRYPOINT ["python", "src/train.py"]
