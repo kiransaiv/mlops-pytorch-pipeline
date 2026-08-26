@@ -38,3 +38,4 @@ assignment.pdf
 # Local-only config overrides (not committed)
 *.local.yaml
 test_image.png
+scratch-*.yaml
