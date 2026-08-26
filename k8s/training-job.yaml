@@ -1,1 +1,97 @@
-# Training Job manifest - implemented in Part D
+# Bundles the PVCs the Job needs alongside the Job itself in one file, since
+# the assignment's required file list has no separate pvc.yaml - applying
+# `kubectl apply -f k8s/training-job.yaml` creates all three resources.
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-data-pvc
+  namespace: ml-training
+spec:
+  # ReadWriteOnce is sufficient here: only the training Job pod writes to
+  # this volume, and a local single-node cluster (Minikube/kind/Docker
+  # Desktop Kubernetes) only ever schedules pods on the one node anyway.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-checkpoints-pvc
+  namespace: ml-training
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cifar10-training-job
+  namespace: ml-training
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: cifar10-training
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: train
+          image: mlops-train:v1
+          # Image is built locally and loaded directly into the cluster's
+          # runtime (no registry push for this assignment) - IfNotPresent
+          # stops Kubernetes from trying to pull it from Docker Hub.
+          imagePullPolicy: IfNotPresent
+          env:
+            # Caps batches/epoch for the required Part F verification run,
+            # so a full CPU-only ResNet-18 training run doesn't take hours.
+            # Remove this env var (or raise the value) for a real, full-scale
+            # training run - it changes nothing else about the pipeline.
+            - name: SMOKE_TEST_MAX_BATCHES
+              value: "5"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/configs
+            - name: data-volume
+              mountPath: /app/data
+            - name: checkpoints-volume
+              mountPath: /app/checkpoints
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+            # --- Bonus (+5): GPU scheduling ---
+            # Uncomment on a cluster with an actual GPU node (the NVIDIA
+            # device plugin must also be installed on that node). Left
+            # disabled by default since most local dev clusters
+            # (Minikube/kind/Docker Desktop) have no GPU node, and an
+            # unschedulable pod would break the required Part F validation.
+            # limits:
+            #   nvidia.com/gpu: 1
+      # --- Bonus (+5), pairs with the GPU limit above ---
+      # nodeSelector:
+      #   accelerator: nvidia-gpu
+      # tolerations:
+      #   - key: "nvidia.com/gpu"
+      #     operator: "Exists"
+      #     effect: "NoSchedule"
+      volumes:
+        - name: config-volume
+          configMap:
+            name: training-config
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+        - name: checkpoints-volume
+          persistentVolumeClaim:
+            claimName: training-checkpoints-pvc
