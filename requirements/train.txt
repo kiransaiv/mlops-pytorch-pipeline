@@ -1,1 +1,4 @@
-# Pinned training dependencies - filled in during Part C
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+torchvision==0.28.0+cpu
+PyYAML==6.0.3
